@@ -48,7 +48,6 @@
 
         <service
             android:name=".JarvisVoiceService"
-            android:description="JARVIS kalit so‘zini kutib, o‘zbekcha ovozli buyruqlarni bajaradi"
             android:exported="false"
             android:foregroundServiceType="microphone" />
     </application>
