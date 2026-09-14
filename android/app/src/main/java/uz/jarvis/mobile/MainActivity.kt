@@ -9,11 +9,9 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
-import android.speech.tts.TextToSpeech
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.widget.Button
@@ -21,241 +19,291 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import android.widget.Toast
-import java.time.LocalDateTime
-import java.time.format.DateTimeFormatter
-import java.util.Locale
 
-class MainActivity : Activity(), TextToSpeech.OnInitListener {
-    private lateinit var recognizer: SpeechRecognizer
-    private lateinit var speechIntent: Intent
-    private lateinit var tts: TextToSpeech
-    private lateinit var status: TextView
-    private lateinit var heard: TextView
-    private lateinit var answer: TextView
-    private lateinit var input: EditText
-    private lateinit var mic: Button
-    private var ttsReady = false
-    private var inputMode: String? = null
-    private var pendingListen = false
-    private var pendingCamera = false
+class MainActivity : Activity() {
 
     companion object {
-        const val REQ_AUDIO = 101
-        const val REQ_CAMERA = 102
+        private const val AUDIO_PERMISSION = 101
+        private const val NOTIFICATION_PERMISSION = 103
     }
+
+    private lateinit var serviceStatus: TextView
+    private lateinit var permissionStatus: TextView
+    private lateinit var resultText: TextView
+    private lateinit var inputText: EditText
+    private var pendingAlwaysOnStart = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.statusBarColor = Color.rgb(5, 11, 18)
         window.navigationBarColor = Color.rgb(5, 11, 18)
         buildUi()
-        tts = TextToSpeech(this, this)
-        setupSpeech()
-        reply("Assalomu alaykum. Men JARVIS Mobile. Mikrofonni bosing va o‘zbekcha gapiring.", false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshStatus()
+        if (pendingAlwaysOnStart && hasAudioPermission() && Settings.canDrawOverlays(this)) {
+            pendingAlwaysOnStart = false
+            startAlwaysOnService()
+        }
     }
 
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(18), dp(20), dp(30))
+            setPadding(dp(20), dp(18), dp(20), dp(32))
             setBackgroundColor(Color.rgb(5, 11, 18))
         }
-        root.addView(TextView(this).apply {
-            text = "J.A.R.V.I.S"; textSize = 29f; letterSpacing = 0.20f
-            setTextColor(Color.rgb(53, 215, 255)); gravity = Gravity.CENTER
-        })
-        root.addView(TextView(this).apply {
-            text = "MOBILE  •  O‘ZBEKCHA OVOZLI YORDAMCHI"; textSize = 11f
-            setTextColor(Color.rgb(125, 158, 174)); gravity = Gravity.CENTER
-        })
-        root.addView(OrbView(this), LinearLayout.LayoutParams(dp(210), dp(210)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL; topMargin = dp(10)
-        })
-        status = TextView(this).apply {
-            text = "TAYYOR"; textSize = 12f; gravity = Gravity.CENTER
-            setTextColor(Color.rgb(53, 215, 255)); setPadding(0, 0, 0, dp(10))
-        }
-        root.addView(status)
-        mic = Button(this).apply {
-            text = "🎙  GAPIRISH"; textSize = 18f; isAllCaps = false
-            setTextColor(Color.WHITE); background = bg(Color.rgb(8, 104, 137), Color.rgb(53, 215, 255))
-            setOnClickListener { requestListening() }
-        }
-        root.addView(mic, LinearLayout.LayoutParams(-1, dp(60)))
-        heard = card("Siz: —")
-        answer = card("JARVIS: —")
-        root.addView(heard, lp(dp(14)))
-        root.addView(answer, lp(dp(8)))
 
-        val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        input = EditText(this).apply {
-            hint = "Buyruqni yozing..."; textSize = 15f; setSingleLine(true)
-            setTextColor(Color.WHITE); setHintTextColor(Color.rgb(100, 128, 142))
-            background = bg(Color.rgb(12, 25, 36), Color.rgb(38, 82, 102))
+        root.addView(TextView(this).apply {
+            text = "J.A.R.V.I.S"
+            textSize = 28f
+            setTextColor(Color.rgb(53, 215, 255))
+            gravity = Gravity.CENTER
+            letterSpacing = 0.22f
+            setPadding(0, dp(8), 0, dp(2))
+        })
+        root.addView(TextView(this).apply {
+            text = "MOBILE v2  •  TELEFON BO‘YLAB OVOZLI YORDAMCHI"
+            textSize = 10.5f
+            setTextColor(Color.rgb(130, 162, 178))
+            gravity = Gravity.CENTER
+        })
+
+        root.addView(OrbView(this), LinearLayout.LayoutParams(dp(190), dp(190)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(12)
+        })
+
+        serviceStatus = statusCard("")
+        permissionStatus = statusCard("")
+        root.addView(serviceStatus, marginParams(dp(4)))
+        root.addView(permissionStatus, marginParams(dp(8)))
+
+        val enableButton = actionButton("🎙  DOIMIY JARVISNI YOQISH") { enableAlwaysOn() }
+        root.addView(enableButton, LinearLayout.LayoutParams(-1, dp(60)).apply { topMargin = dp(12) })
+
+        val permissionButton = actionButton("📱  TELEFON BO‘YLAB ISHLASH RUXSATI") { requestOverlayPermission() }
+        root.addView(permissionButton, LinearLayout.LayoutParams(-1, dp(54)).apply { topMargin = dp(8) })
+
+        val stopButton = actionButton("■  DOIMIY REJIMNI O‘CHIRISH", danger = true) { stopAlwaysOnService() }
+        root.addView(stopButton, LinearLayout.LayoutParams(-1, dp(52)).apply { topMargin = dp(8) })
+
+        resultText = cardText("JARVIS: “JARVIS” deb chaqiring. Masalan: “JARVIS, Telegramga o‘t”.")
+        root.addView(resultText, marginParams(dp(14)))
+
+        val inputRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        inputText = EditText(this).apply {
+            hint = "Buyruqni shu yerda ham sinang..."
+            setHintTextColor(Color.rgb(100, 128, 142))
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            setSingleLine(true)
+            background = rounded(Color.rgb(12, 25, 36), Color.rgb(38, 82, 102))
             setPadding(dp(14), dp(8), dp(14), dp(8))
         }
-        val send = button("Yuborish") {
-            val text = input.text.toString().trim()
-            if (text.isNotEmpty()) {
-                when (inputMode) {
-                    "youtube" -> youtubeSearch(text)
-                    "maps" -> mapsSearch(text)
-                    "google" -> googleSearch(text)
-                    else -> command(text)
-                }
-                input.text.clear(); input.hint = "Buyruqni yozing..."; inputMode = null
+        val sendButton = smallButton("Sinash") {
+            val value = inputText.text.toString().trim()
+            if (value.isNotEmpty()) {
+                val command = stripWakeWord(value)
+                val handled = JarvisCommandExecutor.execute(this, command) { resultText.text = "JARVIS: $it" }
+                if (!handled) resultText.text = "JARVIS: Bu buyruqni tushunmadim. Google qidiruviga yubormadim."
+                inputText.text.clear()
             }
         }
-        inputRow.addView(input, LinearLayout.LayoutParams(0, dp(50), 1f))
-        inputRow.addView(send, LinearLayout.LayoutParams(dp(96), dp(50)).apply { leftMargin = dp(8) })
-        root.addView(inputRow, lp(dp(14)))
+        inputRow.addView(inputText, LinearLayout.LayoutParams(0, dp(50), 1f))
+        inputRow.addView(sendButton, LinearLayout.LayoutParams(dp(94), dp(50)).apply { leftMargin = dp(8) })
+        root.addView(inputRow, marginParams(dp(10)))
 
         root.addView(TextView(this).apply {
-            text = "TEZKOR AMALLAR"; textSize = 11f; setTextColor(Color.rgb(125, 158, 174)); setPadding(0, dp(18), 0, dp(8))
+            text = "QANDAY ISHLAYDI"
+            textSize = 11f
+            setTextColor(Color.rgb(130, 162, 178))
+            setPadding(0, dp(20), 0, dp(8))
         })
-        val row1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row1.addView(button("Google") { searchPrompt("google", "Google qidiruvi") }, weight())
-        row1.addView(button("YouTube") { searchPrompt("youtube", "YouTube qidiruvi") }, weight(true))
-        row1.addView(button("Xarita") { searchPrompt("maps", "Xaritadan qidirish") }, weight(true))
-        root.addView(row1)
-        val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        row2.addView(button("Kamera") { openCamera() }, weight())
-        row2.addView(button("Fayl") { openFiles() }, weight(true))
-        row2.addView(button("Telefon") { dial("") }, weight(true))
-        root.addView(row2, lp(dp(8)))
+        root.addView(cardText(
+            "1. Telefon bo‘ylab ishlash ruxsatini bir marta yoqing.\n" +
+            "2. DOIMIY JARVISNI YOQISH tugmasini bosing.\n" +
+            "3. Ilovadan chiqing — JARVIS bildirishnomada ishlashda davom etadi.\n" +
+            "4. “JARVIS” + buyruqni ayting. Yoki avval “JARVIS” deng, u “Eshitaman” degach 15 soniya ichida buyruq bering."
+        ))
+
         root.addView(TextView(this).apply {
-            text = "Misollar: “Soat nechi?”, “YouTube'dan musiqa qidir”, “Google'dan Buxoro yangiliklarini qidir”, “Xaritadan Arkni ko‘rsat”, “Kamerani och”."
-            textSize = 12f; setTextColor(Color.rgb(121, 151, 166)); setPadding(dp(2), dp(18), dp(2), 0)
+            text = "BUYRUQ MISOLLARI"
+            textSize = 11f
+            setTextColor(Color.rgb(130, 162, 178))
+            setPadding(0, dp(20), 0, dp(8))
         })
-        setContentView(ScrollView(this).apply { isFillViewport = true; addView(root) })
-    }
+        root.addView(cardText(
+            "• JARVIS, aloqaga o‘t\n" +
+            "• JARVIS, Telegramga o‘t\n" +
+            "• JARVIS, Instagramni och\n" +
+            "• JARVIS, YouTube'ni och\n" +
+            "• JARVIS, kameraga o‘t\n" +
+            "• JARVIS, sozlamalarga o‘t\n" +
+            "• JARVIS, Google'dan Buxoro yangiliklarini qidir\n" +
+            "• JARVIS, xaritadan Arkni ko‘rsat\n" +
+            "• JARVIS, soat nechi"
+        ))
 
-    private fun setupSpeech() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            status.text = "OVOZNI TANISH XIZMATI TOPILMADI"; mic.isEnabled = false; return
-        }
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this)
-        speechIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "uz-UZ")
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "uz-UZ")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-        }
-        recognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(p: Bundle?) { status.text = "TINGLAYAPMAN..."; mic.text = "●  TINGLAYAPMAN" }
-            override fun onBeginningOfSpeech() { status.text = "OVOZ QABUL QILINDI" }
-            override fun onRmsChanged(v: Float) = Unit
-            override fun onBufferReceived(b: ByteArray?) = Unit
-            override fun onEndOfSpeech() { status.text = "TUSHUNYAPMAN..." }
-            override fun onError(e: Int) {
-                status.text = "QAYTA URINING"; mic.text = "🎙  GAPIRISH"
-                if (e != SpeechRecognizer.ERROR_NO_MATCH && e != SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
-                    Toast.makeText(this@MainActivity, "Ovozni tanishda xatolik: $e", Toast.LENGTH_SHORT).show()
-            }
-            override fun onResults(r: Bundle?) {
-                status.text = "TAYYOR"; mic.text = "🎙  GAPIRISH"
-                r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { command(it) }
-            }
-            override fun onPartialResults(r: Bundle?) {
-                r?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.let { heard.text = "Siz: $it" }
-            }
-            override fun onEvent(t: Int, p: Bundle?) = Unit
+        root.addView(TextView(this).apply {
+            text = "Eslatma: doimiy ovoz tanish batareyani oddiy ilovaga qaraganda ko‘proq ishlatishi mumkin. Telefon JARVIS servisining mikrofon bildirishnomasini ko‘rsatib turadi."
+            textSize = 11f
+            setTextColor(Color.rgb(112, 139, 153))
+            setPadding(0, dp(16), 0, 0)
         })
+
+        setContentView(ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        })
+        refreshStatus()
     }
 
-    private fun requestListening() {
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            pendingListen = true; requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_AUDIO)
-        } else startListening()
+    private fun enableAlwaysOn() {
+        pendingAlwaysOnStart = true
+        if (!hasAudioPermission()) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), AUDIO_PERMISSION)
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION)
+        }
+        if (!Settings.canDrawOverlays(this)) {
+            requestOverlayPermission()
+            resultText.text = "JARVIS: ‘Boshqa ilovalar ustida ko‘rsatish’ ruxsatini yoqing va shu ekranga qayting."
+            return
+        }
+        pendingAlwaysOnStart = false
+        startAlwaysOnService()
     }
 
-    private fun startListening() {
-        if (::recognizer.isInitialized) { heard.text = "Siz: ..."; recognizer.cancel(); recognizer.startListening(speechIntent) }
+    private fun startAlwaysOnService() {
+        if (!hasAudioPermission()) return
+        val intent = Intent(this, JarvisVoiceService::class.java).setAction(JarvisVoiceService.ACTION_START)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(intent) else startService(intent)
+        getSharedPreferences(JarvisVoiceService.PREFS, MODE_PRIVATE).edit().putBoolean(JarvisVoiceService.KEY_ALWAYS_ON, true).apply()
+        resultText.text = "JARVIS: Doimiy rejim yoqildi. Endi ilovadan chiqib, ‘JARVIS, aloqaga o‘t’ deb sinang."
+        refreshStatus()
     }
 
-    private fun command(raw: String) {
-        heard.text = "Siz: $raw"
-        val q = norm(raw)
-        when {
-            any(q, "assalomu alaykum", "salom") -> reply("Va alaykum assalom. Xizmatingizga tayyorman.")
-            any(q, "shu yerdamisan", "bormisan") -> reply("Ha, shu yerdaman. Buyruq berishingiz mumkin.")
-            any(q, "kimsan", "isming nima") -> reply("Men JARVIS Mobile, o‘zbekcha ovozli yordamchiman.")
-            any(q, "nima qila olasan", "imkoniyatlaring", "yordam") -> reply("Men o‘zbekcha ovozni tushunaman, Google, YouTube va xaritadan qidiraman, kamera, fayl va telefon oynalarini ochaman, vaqt va sanani aytaman.")
-            any(q, "soat nechi", "vaqt nechi", "hozir soat") -> reply("Hozir soat ${LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm"))}.")
-            any(q, "bugungi sana", "bugun sana", "sana nechi") -> reply("Bugungi sana ${LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy"))}.")
-            any(q, "kamerani och", "kamera och", "kamerani yoq") -> openCamera()
-            any(q, "fayl tanla", "faylni tanla", "fayllarni och") -> openFiles()
-            any(q, "telefonni och", "raqam ter", "qo'ng'iroq") -> {
-                val n = Regex("\\+?\\d[\\d \\-]{4,}\\d").find(q)?.value?.replace(" ", "")?.replace("-", "").orEmpty(); dial(n)
-            }
-            q.contains("youtube") && any(q, "qidir", "izla", "top") -> {
-                val x = clean(q, listOf("youtube'dan", "youtube dan", "youtube", "qidir", "izla", "top", "menga")); if (x.isBlank()) searchPrompt("youtube", "YouTube qidiruvi") else youtubeSearch(x)
-            }
-            any(q, "youtube'ni och", "youtube ni och", "youtube och") -> openUrl("https://www.youtube.com")
-            q.contains("google") && any(q, "qidir", "izla", "top") -> {
-                val x = clean(q, listOf("google'dan", "google dan", "google", "qidir", "izla", "top", "menga")); if (x.isBlank()) searchPrompt("google", "Google qidiruvi") else googleSearch(x)
-            }
-            any(q, "google'ni och", "google ni och", "google och") -> openUrl("https://www.google.com")
-            any(q, "xaritadan", "xaritada", "maps") -> {
-                val x = clean(q, listOf("xaritadan", "xaritada", "google maps", "maps", "ko'rsat", "qidir", "top", "och")); if (x.isBlank()) searchPrompt("maps", "Xaritadan qidirish") else mapsSearch(x)
-            }
-            any(q, "telegramni och", "telegram och") -> openUrl("https://t.me")
-            else -> { reply("Bu gap uchun maxsus telefon buyrug‘i hali yo‘q. Google qidiruvini ochaman.", false); googleSearch(raw) }
+    private fun stopAlwaysOnService() {
+        startService(Intent(this, JarvisVoiceService::class.java).setAction(JarvisVoiceService.ACTION_STOP))
+        getSharedPreferences(JarvisVoiceService.PREFS, MODE_PRIVATE).edit().putBoolean(JarvisVoiceService.KEY_ALWAYS_ON, false).apply()
+        resultText.text = "JARVIS: Doimiy rejim o‘chirildi."
+        refreshStatus()
+    }
+
+    private fun requestOverlayPermission() {
+        try {
+            startActivity(Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            ))
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_SETTINGS))
         }
     }
 
-    private fun searchPrompt(mode: String, title: String) { inputMode = mode; input.hint = "$title: so‘rovni yozing"; input.requestFocus(); reply("So‘rovni yozib Yuborish tugmasini bosing.", false) }
-    private fun googleSearch(q: String) { reply("Google'dan “$q” bo‘yicha qidiryapman."); openUrl("https://www.google.com/search?q=${Uri.encode(q)}") }
-    private fun youtubeSearch(q: String) { reply("YouTube'dan “$q” bo‘yicha qidiryapman."); openUrl("https://www.youtube.com/results?search_query=${Uri.encode(q)}") }
-    private fun mapsSearch(q: String) {
-        reply("Xaritadan “$q” joyini ochyapman.")
-        val i = Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=${Uri.encode(q)}"))
-        if (i.resolveActivity(packageManager) != null) startActivity(i) else openUrl("https://www.google.com/maps/search/?api=1&query=${Uri.encode(q)}")
-    }
-    private fun dial(n: String) { reply(if (n.isBlank()) "Telefon terish oynasini ochyapman." else "$n raqamini terish oynasiga qo‘ydim."); startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:$n"))) }
-    private fun openFiles() { reply("Fayl tanlash oynasini ochyapman."); startActivity(Intent(Intent.ACTION_OPEN_DOCUMENT).apply { addCategory(Intent.CATEGORY_OPENABLE); type = "*/*" }) }
-    private fun openCamera() {
-        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) { pendingCamera = true; requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA); return }
-        val i = Intent("android.media.action.IMAGE_CAPTURE")
-        if (i.resolveActivity(packageManager) != null) { reply("Kamerani ochyapman."); startActivity(i) } else reply("Kamera ilovasi topilmadi.")
-    }
-    private fun openUrl(url: String) { try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) { reply("Bu amalni ochadigan ilova topilmadi.", false) } }
+    private fun refreshStatus() {
+        if (!::serviceStatus.isInitialized) return
+        val enabled = getSharedPreferences(JarvisVoiceService.PREFS, MODE_PRIVATE)
+            .getBoolean(JarvisVoiceService.KEY_ALWAYS_ON, false)
+        serviceStatus.text = if (enabled) "● DOIMIY JARVIS: YOQILGAN" else "○ DOIMIY JARVIS: O‘CHIQ"
+        serviceStatus.setTextColor(if (enabled) Color.rgb(72, 224, 154) else Color.rgb(180, 194, 202))
 
-    private fun reply(text: String, speak: Boolean = true) { answer.text = "JARVIS: $text"; if (speak && ttsReady) tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis") }
-    override fun onInit(s: Int) { if (s == TextToSpeech.SUCCESS) { val r = tts.setLanguage(Locale.forLanguageTag("uz-UZ")); ttsReady = r != TextToSpeech.LANG_MISSING_DATA && r != TextToSpeech.LANG_NOT_SUPPORTED; tts.setSpeechRate(.95f) } }
-
-    override fun onRequestPermissionsResult(code: Int, p: Array<out String>, g: IntArray) {
-        super.onRequestPermissionsResult(code, p, g); val ok = g.isNotEmpty() && g[0] == PackageManager.PERMISSION_GRANTED
-        if (code == REQ_AUDIO) { if (ok && pendingListen) startListening() else if (!ok) reply("Mikrofon ruxsati kerak.", false); pendingListen = false }
-        if (code == REQ_CAMERA) { pendingCamera = false; if (ok) openCamera() else reply("Kamera ruxsati berilmadi.", false) }
+        val overlay = Settings.canDrawOverlays(this)
+        permissionStatus.text = if (overlay) "✓ Telefon bo‘ylab ilovalarni ochish ruxsati berilgan" else "! Telefon bo‘ylab ishlash ruxsati hali berilmagan"
+        permissionStatus.setTextColor(if (overlay) Color.rgb(72, 224, 154) else Color.rgb(255, 191, 71))
     }
 
-    private fun norm(s: String) = s.lowercase(Locale.ROOT).replace('’', '\'').replace('`', '\'').replace('ʻ', '\'').trim()
-    private fun any(s: String, vararg k: String) = k.any { s.contains(it) }
-    private fun clean(s: String, w: List<String>): String { var r = s; w.sortedByDescending { it.length }.forEach { r = r.replace(it, " ") }; return r.replace(Regex("\\s+"), " ").trim().trim('-', ':', ',', '.') }
-    private fun card(s: String) = TextView(this).apply { text = s; textSize = 14f; setTextColor(Color.rgb(222,242,248)); background = bg(Color.rgb(10,22,32), Color.rgb(24,58,74)); setPadding(dp(14),dp(14),dp(14),dp(14)) }
-    private fun button(s: String, f: () -> Unit) = Button(this).apply { text=s; textSize=12f; isAllCaps=false; setTextColor(Color.rgb(219,245,251)); background=bg(Color.rgb(11,38,51),Color.rgb(35,92,115)); setOnClickListener { f() } }
-    private fun bg(fill: Int, stroke: Int) = GradientDrawable().apply { cornerRadius=dp(14).toFloat(); setColor(fill); setStroke(dp(1),stroke) }
-    private fun lp(top: Int) = LinearLayout.LayoutParams(-1,-2).apply { topMargin=top }
-    private fun weight(left: Boolean=false) = LinearLayout.LayoutParams(0,dp(48),1f).apply { if(left) leftMargin=dp(7) }
-    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+    private fun hasAudioPermission() = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
 
-    override fun onDestroy() { if (::recognizer.isInitialized) recognizer.destroy(); tts.stop(); tts.shutdown(); super.onDestroy() }
-}
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == AUDIO_PERMISSION) {
+            val granted = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+            if (granted) enableAlwaysOn() else resultText.text = "JARVIS: Mikrofon ruxsatisiz doimiy ovozli rejim ishlamaydi."
+        }
+    }
 
-class OrbView(context: android.content.Context) : View(context) {
-    private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private var phase = 0f
-    override fun onDraw(c: Canvas) {
-        val x=width/2f; val y=height/2f; val b=minOf(width,height)*.23f; val p=((kotlin.math.sin(phase.toDouble())+1)/2).toFloat()
-        fill.color=Color.argb(42+(p*30).toInt(),53,215,255); c.drawCircle(x,y,b*(1.62f+p*.12f),fill)
-        ring.color=Color.rgb(21,99,126); ring.strokeWidth=2f; c.drawCircle(x,y,b*1.43f,ring)
-        ring.color=Color.rgb(53,215,255); ring.strokeWidth=5f; c.drawCircle(x,y,b,ring)
-        fill.color=Color.rgb(8,50,67); c.drawCircle(x,y,b*.72f,fill)
-        ring.color=Color.rgb(185,245,255); ring.strokeWidth=2f; c.drawCircle(x,y,b*.55f,ring)
-        phase+=.08f; postInvalidateDelayed(40)
+    private fun stripWakeWord(value: String): String {
+        var result = JarvisCommandExecutor.normalize(value)
+        listOf("jarvis", "jervis", "jarviz", "jarves").forEach { wake ->
+            if (result.startsWith(wake)) result = result.removePrefix(wake).trim().trim(',', '.', ':', '-')
+        }
+        return result
+    }
+
+    private fun statusCard(initial: String) = TextView(this).apply {
+        text = initial
+        textSize = 13f
+        gravity = Gravity.CENTER
+        background = rounded(Color.rgb(9, 20, 29), Color.rgb(31, 67, 83))
+        setPadding(dp(12), dp(11), dp(12), dp(11))
+    }
+
+    private fun cardText(initial: String) = TextView(this).apply {
+        text = initial
+        textSize = 14f
+        setTextColor(Color.rgb(222, 242, 248))
+        background = rounded(Color.rgb(10, 22, 32), Color.rgb(24, 58, 74))
+        setPadding(dp(14), dp(14), dp(14), dp(14))
+    }
+
+    private fun actionButton(label: String, danger: Boolean = false, click: () -> Unit) = Button(this).apply {
+        text = label
+        textSize = 15f
+        isAllCaps = false
+        setTextColor(Color.WHITE)
+        background = rounded(
+            if (danger) Color.rgb(89, 35, 43) else Color.rgb(8, 104, 137),
+            if (danger) Color.rgb(186, 75, 86) else Color.rgb(53, 215, 255)
+        )
+        setOnClickListener { click() }
+    }
+
+    private fun smallButton(label: String, click: () -> Unit) = Button(this).apply {
+        text = label
+        isAllCaps = false
+        setTextColor(Color.WHITE)
+        background = rounded(Color.rgb(12, 46, 61), Color.rgb(36, 94, 117))
+        setOnClickListener { click() }
+    }
+
+    private fun rounded(fill: Int, stroke: Int) = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(16).toFloat()
+        setColor(fill)
+        setStroke(dp(1), stroke)
+    }
+
+    private fun marginParams(top: Int) = LinearLayout.LayoutParams(-1, -2).apply { topMargin = top }
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private class OrbView(context: android.content.Context) : View(context) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val cx = width / 2f
+            val cy = height / 2f
+            val r = minOf(width, height) * 0.43f
+            paint.style = Paint.Style.FILL
+            paint.color = Color.rgb(7, 55, 69)
+            canvas.drawCircle(cx, cy, r, paint)
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = width * 0.015f
+            paint.color = Color.rgb(53, 215, 255)
+            canvas.drawCircle(cx, cy, r * 0.63f, paint)
+            paint.strokeWidth = width * 0.005f
+            paint.color = Color.rgb(126, 226, 248)
+            canvas.drawCircle(cx, cy, r * 0.36f, paint)
+            paint.color = Color.rgb(20, 112, 137)
+            canvas.drawCircle(cx, cy, r * 0.90f, paint)
+        }
     }
 }
