@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">JARVIS Mobile</string>
+    <string name="accessibility_desc">JARVIS telefonni ovozli boshqarishda yordam berishi uchun ekrandagi boshqaruv elementlarini aniqlaydi va foydalanuvchi buyruqlariga ko‘ra bosish hamda surish amallarini bajaradi.</string>
+    <string name="notification_listener_label">JARVIS xabar yordamchisi</string>
+</resources>
