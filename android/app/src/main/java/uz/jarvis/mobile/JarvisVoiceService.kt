@@ -92,7 +92,6 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
             .setContentIntent(openIntent)
             .setOngoing(true)
             .setCategory(Notification.CATEGORY_SERVICE)
-            .setSilent(true)
             .addAction(Notification.Action.Builder(null, "O‘chirish", stopIntent).build())
             .build()
     }
