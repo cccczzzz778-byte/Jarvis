@@ -2,7 +2,7 @@ import http from 'node:http';
 
 const PORT = Number(process.env.PORT || 8080);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-6-astra';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
 
 const schema = {
   type: 'object',
