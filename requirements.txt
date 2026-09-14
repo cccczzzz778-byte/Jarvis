@@ -1,0 +1,5 @@
+SpeechRecognition>=3.10,<4
+PyAudio>=0.2.14,<0.3
+edge-tts>=7.2,<8
+pygame>=2.5,<3
+psutil>=5.9,<8
