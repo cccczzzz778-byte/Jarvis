@@ -22,7 +22,6 @@ import android.speech.tts.UtteranceProgressListener
 import java.util.Locale
 
 class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
-
     companion object {
         const val ACTION_START = "uz.jarvis.mobile.action.START"
         const val ACTION_STOP = "uz.jarvis.mobile.action.STOP"
@@ -33,6 +32,7 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val listenRunnable = Runnable { startListening() }
     private var recognizer: SpeechRecognizer? = null
     private lateinit var recognizerIntent: Intent
     private lateinit var tts: TextToSpeech
@@ -45,7 +45,6 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
     private var audioMutedByJarvis = false
     private var savedMusicVolume = -1
     private var savedSystemVolume = -1
-
     private val wakeWords = listOf("jarvis", "jervis", "jarviz", "jarves", "jarvesh", "j.a.r.v.i.s")
 
     override fun onCreate() {
@@ -68,7 +67,6 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
             stopJarvis()
             return START_NOT_STICKY
         }
-
         startAsForeground()
         getSharedPreferences(PREFS, MODE_PRIVATE).edit().putBoolean(KEY_ALWAYS_ON, true).apply()
         stopping = false
@@ -81,22 +79,12 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
         val notification = buildNotification("JARVIS kalit so‘zini kutyapman")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
+        } else startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun buildNotification(text: String): Notification {
-        val openIntent = PendingIntent.getActivity(
-            this, 1,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val stopIntent = PendingIntent.getService(
-            this, 2,
-            Intent(this, JarvisVoiceService::class.java).setAction(ACTION_STOP),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val openIntent = PendingIntent.getActivity(this, 1, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val stopIntent = PendingIntent.getService(this, 2, Intent(this, JarvisVoiceService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         return Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_jarvis)
             .setContentTitle("JARVIS doimiy rejim yoqilgan")
@@ -133,34 +121,25 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
                     mainHandler.postDelayed({ restoreRecognitionAudio() }, 180)
                     updateNotification(if (System.currentTimeMillis() < armedUntil) "Buyruqni kutyapman…" else "JARVIS kalit so‘zini kutyapman")
                 }
-
                 override fun onBeginningOfSpeech() = Unit
                 override fun onRmsChanged(rmsdB: Float) = Unit
                 override fun onBufferReceived(buffer: ByteArray?) = Unit
-                override fun onEndOfSpeech() {
-                    listening = false
-                    muteRecognitionTone()
-                }
-
+                override fun onEndOfSpeech() { listening = false; muteRecognitionTone() }
                 override fun onError(error: Int) {
                     listening = false
                     mainHandler.postDelayed({ restoreRecognitionAudio() }, 260)
                     if (!stopping && !speaking) scheduleListen(if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY) 1300 else 550)
                 }
-
                 override fun onResults(results: Bundle?) {
                     listening = false
-                    val choices = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION).orEmpty()
-                    val text = choices.firstOrNull().orEmpty().trim()
+                    val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty().trim()
                     if (text.isNotBlank()) processHeard(text) else scheduleListen(350)
                 }
-
                 override fun onPartialResults(partialResults: Bundle?) {
                     val text = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull().orEmpty()
                     val normalized = JarvisCommandExecutor.normalize(text)
                     if (wakeWords.any { normalized.contains(it) }) updateNotification("JARVIS eshitdi: $text")
                 }
-
                 override fun onEvent(eventType: Int, params: Bundle?) = Unit
             })
         }
@@ -170,7 +149,6 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
         val normalized = JarvisCommandExecutor.normalize(raw)
         val now = System.currentTimeMillis()
         val wake = wakeWords.firstOrNull { normalized.contains(it) }
-
         if (wake != null) {
             val index = normalized.indexOf(wake)
             val command = normalized.substring(index + wake.length).trim().trim(',', '.', ':', '-', '!')
@@ -183,13 +161,10 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
             executeCommand(command)
             return
         }
-
         if (now < armedUntil) {
             armedUntil = 0L
             executeCommand(normalized)
-        } else {
-            scheduleListen(350)
-        }
+        } else scheduleListen(350)
     }
 
     private fun executeCommand(command: String) {
@@ -206,15 +181,11 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
         try { recognizer?.cancel() } catch (_: Exception) {}
         muteRecognitionTone()
         updateNotification(text)
-
         mainHandler.postDelayed({
             restoreRecognitionAudio()
             if (ttsReady) {
                 val result = tts.speak(text, TextToSpeech.QUEUE_FLUSH, null, "jarvis-bg-${System.currentTimeMillis()}")
-                if (result == TextToSpeech.ERROR) {
-                    speaking = false
-                    scheduleListen(650)
-                }
+                if (result == TextToSpeech.ERROR) { speaking = false; scheduleListen(650) }
             } else {
                 speaking = false
                 scheduleListen(650)
@@ -224,46 +195,20 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
 
     override fun onInit(status: Int) {
         if (status != TextToSpeech.SUCCESS) return
-
-        val candidates = listOf(
-            Locale.forLanguageTag("uz-UZ"),
-            Locale("uz", "UZ"),
-            Locale.forLanguageTag("tr-TR"),
-            Locale.forLanguageTag("ru-RU"),
-            Locale.US
-        )
+        val candidates = listOf(Locale.forLanguageTag("uz-UZ"), Locale("uz", "UZ"), Locale.forLanguageTag("tr-TR"), Locale.forLanguageTag("ru-RU"), Locale.US)
         ttsReady = false
         for (locale in candidates) {
             val result = tts.setLanguage(locale)
-            if (result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED) {
-                ttsReady = true
-                break
-            }
+            if (result != TextToSpeech.LANG_MISSING_DATA && result != TextToSpeech.LANG_NOT_SUPPORTED) { ttsReady = true; break }
         }
-
         tts.setSpeechRate(0.93f)
         tts.setPitch(0.90f)
-        tts.setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                .build()
-        )
+        tts.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
         tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) = Unit
-            override fun onDone(utteranceId: String?) {
-                mainHandler.post {
-                    speaking = false
-                    scheduleListen(520)
-                }
-            }
+            override fun onDone(utteranceId: String?) { mainHandler.post { speaking = false; scheduleListen(520) } }
             @Deprecated("Deprecated in Java")
-            override fun onError(utteranceId: String?) {
-                mainHandler.post {
-                    speaking = false
-                    scheduleListen(520)
-                }
-            }
+            override fun onError(utteranceId: String?) { mainHandler.post { speaking = false; scheduleListen(520) } }
         })
     }
 
@@ -289,8 +234,8 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
 
     private fun scheduleListen(delay: Long) {
         if (stopping || speaking) return
-        mainHandler.removeCallbacksAndMessages(null)
-        mainHandler.postDelayed({ startListening() }, delay)
+        mainHandler.removeCallbacks(listenRunnable)
+        mainHandler.postDelayed(listenRunnable, delay)
     }
 
     private fun startListening() {
@@ -321,6 +266,7 @@ class JarvisVoiceService : Service(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacksAndMessages(null)
         restoreRecognitionAudio()
         try { recognizer?.destroy() } catch (_: Exception) {}
         if (::tts.isInitialized) tts.shutdown()
