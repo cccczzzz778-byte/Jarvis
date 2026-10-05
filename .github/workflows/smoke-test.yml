@@ -20,3 +20,15 @@ jobs:
         run: python -m py_compile jarvis.py
       - name: Uzbek command smoke test
         run: python jarvis.py --text "nimalar qila olasan" --no-voice
+
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Agent path end-to-end test
+        run: node backend/test-agent-path.mjs
