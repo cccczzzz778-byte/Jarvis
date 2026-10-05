@@ -62,7 +62,7 @@ object JarvisAiClient {
                     put("notification_text", notificationText ?: "")
                     if (!screenshotBase64.isNullOrBlank()) put("screenshot_base64", screenshotBase64)
                 }
-                val connection = (URL("$base/api/agent").openConnection() as HttpURLConnection).apply {
+                val connection = (URL("$base/v1/agent").openConnection() as HttpURLConnection).apply {
                     requestMethod = "POST"
                     connectTimeout = 15000
                     readTimeout = 60000

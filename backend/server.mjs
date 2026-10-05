@@ -3,6 +3,11 @@ import http from 'node:http';
 const PORT = Number(process.env.PORT || 8080);
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.6-sol';
+// Base URL is overridable so the agent path/round-trip can be tested against a mock.
+const OPENAI_BASE_URL = (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
+// Canonical agent endpoint used by the Android client. `/api/agent` is kept as an
+// alias so older APK builds keep working during rollout.
+const AGENT_PATHS = new Set(['/v1/agent', '/api/agent']);
 
 const schema = {
   type: 'object',
@@ -42,7 +47,7 @@ async function handleAgent(payload) {
     content.push({type:'input_image', image_url:`data:image/jpeg;base64,${payload.screenshot_base64}`, detail:'low'});
   }
 
-  const response = await fetch('https://api.openai.com/v1/responses', {
+  const response = await fetch(`${OPENAI_BASE_URL}/responses`, {
     method: 'POST',
     headers: {'authorization':`Bearer ${OPENAI_API_KEY}`,'content-type':'application/json'},
     body: JSON.stringify({
@@ -69,8 +74,9 @@ async function handleAgent(payload) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET' && req.url === '/health') return send(res, 200, {ok:true, model:OPENAI_MODEL, ai:Boolean(OPENAI_API_KEY)});
-  if (req.method !== 'POST' || req.url !== '/v1/agent') return send(res, 404, {error:'not_found'});
+  const path = (req.url || '').split('?')[0];
+  if (req.method === 'GET' && path === '/health') return send(res, 200, {ok:true, model:OPENAI_MODEL, ai:Boolean(OPENAI_API_KEY)});
+  if (req.method !== 'POST' || !AGENT_PATHS.has(path)) return send(res, 404, {error:'not_found'});
   let body = '';
   req.on('data', chunk => {
     body += chunk;
@@ -80,6 +86,7 @@ const server = http.createServer(async (req, res) => {
     try {
       const payload = JSON.parse(body || '{}');
       const action = await handleAgent(payload);
+      console.log(`[agent] 200 ${path} action=${action.action} request=${String(payload.request || '').slice(0, 120)}`);
       send(res, 200, action);
     } catch (e) {
       send(res, 503, {error:String(e?.message || e)});
